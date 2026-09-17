@@ -86,6 +86,7 @@ class SiteState:
     consecutive_failures: int = 0
     is_down: bool = False
     last_error: str = ""
+    last_down_notify_date: object = None
 
 
 def check_site(url: str, timeout: int) -> tuple:
@@ -148,27 +149,40 @@ def run() -> None:
                     log(f"[正常] {url}")
                 state.consecutive_failures = 0
                 state.is_down = False
+                state.last_down_notify_date = None
             else:
                 state.consecutive_failures += 1
                 state.last_error = err
                 log(
                     f"[异常] {url} 第 {state.consecutive_failures} 次检测失败: {err}"
                 )
-                if (
-                    state.consecutive_failures >= cfg.failure_threshold
-                    and not state.is_down
-                ):
-                    state.is_down = True
-                    log(f"[下线] {url} 判定为已下线,发送通知邮件")
-                    send_mail(
-                        cfg,
-                        subject=f"[网站监控] 网站已下线: {url}",
-                        body=(
-                            f"网站 {url} 于 {datetime.now():%Y-%m-%d %H:%M:%S} "
-                            f"检测失败(连续 {state.consecutive_failures} 次)。\n"
-                            f"最近一次错误信息: {err}"
-                        ),
-                    )
+                if state.consecutive_failures >= cfg.failure_threshold:
+                    today = datetime.now().date()
+                    if not state.is_down:
+                        state.is_down = True
+                        log(f"[下线] {url} 判定为已下线,发送通知邮件")
+                        send_mail(
+                            cfg,
+                            subject=f"[网站监控] 网站已下线: {url}",
+                            body=(
+                                f"网站 {url} 于 {datetime.now():%Y-%m-%d %H:%M:%S} "
+                                f"检测失败(连续 {state.consecutive_failures} 次)。\n"
+                                f"最近一次错误信息: {err}"
+                            ),
+                        )
+                        state.last_down_notify_date = today
+                    elif state.last_down_notify_date != today:
+                        log(f"[下线持续] {url} 今日仍处于下线状态,再次发送通知邮件")
+                        send_mail(
+                            cfg,
+                            subject=f"[网站监控] 网站仍未恢复: {url}",
+                            body=(
+                                f"网站 {url} 截至 {datetime.now():%Y-%m-%d %H:%M:%S} "
+                                f"仍处于下线状态。\n"
+                                f"最近一次错误信息: {err}"
+                            ),
+                        )
+                        state.last_down_notify_date = today
 
         time.sleep(cfg.check_interval)
 
