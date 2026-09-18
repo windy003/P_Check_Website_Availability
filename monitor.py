@@ -19,6 +19,29 @@ def log(msg: str) -> None:
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
 
 
+MAIL_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Check_Website_Availability.log")
+MAIL_LOG_MAX_ENTRIES = 300
+MAIL_LOG_SEPARATOR = "-" * 40
+
+
+def record_mail_log(entry: str) -> None:
+    """将发送邮件的记录(含邮件详情)写入日志文件,最新的在最顶部,最多保留 MAIL_LOG_MAX_ENTRIES 条。"""
+    try:
+        existing_entries = []
+        if os.path.exists(MAIL_LOG_FILE):
+            with open(MAIL_LOG_FILE, "r", encoding="utf-8") as f:
+                content = f.read()
+            existing_entries = [
+                e.strip("\n") for e in content.split(MAIL_LOG_SEPARATOR + "\n") if e.strip()
+            ]
+        existing_entries.insert(0, entry.strip("\n"))
+        existing_entries = existing_entries[:MAIL_LOG_MAX_ENTRIES]
+        with open(MAIL_LOG_FILE, "w", encoding="utf-8") as f:
+            f.write((f"\n{MAIL_LOG_SEPARATOR}\n").join(existing_entries) + "\n")
+    except Exception as exc:
+        log(f"写入邮件日志失败: {exc}")
+
+
 def env_bool(name: str, default: bool) -> bool:
     val = os.getenv(name)
     if val is None:
@@ -118,8 +141,19 @@ def send_mail(cfg: Config, subject: str, body: str) -> None:
             server.login(cfg.smtp_user, cfg.smtp_password)
             server.sendmail(cfg.mail_from, cfg.mail_to, msg.as_string())
         log(f"已发送邮件通知: {subject}")
+        record_mail_log(
+            f"[{datetime.now():%Y-%m-%d %H:%M:%S}] 发送成功: {subject}\n"
+            f"收件人: {', '.join(cfg.mail_to)}\n"
+            f"内容:\n{body}"
+        )
     except Exception as exc:
         log(f"发送邮件失败: {exc}")
+        record_mail_log(
+            f"[{datetime.now():%Y-%m-%d %H:%M:%S}] 发送失败: {subject}\n"
+            f"收件人: {', '.join(cfg.mail_to)}\n"
+            f"错误: {exc}\n"
+            f"内容:\n{body}"
+        )
 
 
 def send_daily_report(cfg: Config, states: dict) -> None:
