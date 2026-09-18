@@ -33,8 +33,7 @@ class Config:
     request_timeout: int
     failure_threshold: int
     notify_on_recovery: bool
-    up_report_hour: int
-    down_report_hour: int
+    daily_report_hour: int
     smtp_host: str
     smtp_port: int
     smtp_use_ssl: bool
@@ -72,8 +71,7 @@ def load_config() -> Config:
         request_timeout=int(os.getenv("REQUEST_TIMEOUT", "10")),
         failure_threshold=int(os.getenv("FAILURE_THRESHOLD", "2")),
         notify_on_recovery=env_bool("NOTIFY_ON_RECOVERY", True),
-        up_report_hour=int(os.getenv("UP_REPORT_HOUR", "9")),
-        down_report_hour=int(os.getenv("DOWN_REPORT_HOUR", "10")),
+        daily_report_hour=int(os.getenv("DAILY_REPORT_HOUR", "9")),
         smtp_host=os.getenv("SMTP_HOST", ""),
         smtp_port=int(os.getenv("SMTP_PORT", "465")),
         smtp_use_ssl=env_bool("SMTP_USE_SSL", True),
@@ -124,30 +122,33 @@ def send_mail(cfg: Config, subject: str, body: str) -> None:
         log(f"发送邮件失败: {exc}")
 
 
-def send_daily_report(cfg: Config, states: dict, urls_up: bool) -> None:
-    if urls_up:
-        urls = [url for url in cfg.site_urls if not states[url].is_down]
-        if not urls:
-            return
-        subject = "[网站监控] 每日报告: 正常运行的网站"
-        lines = [f"截至 {datetime.now():%Y-%m-%d %H:%M:%S},以下网站运行正常:", ""]
-        lines += [f"  - {url}" for url in urls]
+def send_daily_report(cfg: Config, states: dict) -> None:
+    up_urls = [url for url in cfg.site_urls if not states[url].is_down]
+    down_urls = [url for url in cfg.site_urls if states[url].is_down]
+
+    lines = [f"截至 {datetime.now():%Y-%m-%d %H:%M:%S} 的每日监控报告:", ""]
+
+    lines.append(f"正常运行({len(up_urls)}):")
+    if up_urls:
+        lines += [f"  - {url}" for url in up_urls]
     else:
-        urls = [url for url in cfg.site_urls if states[url].is_down]
-        if not urls:
-            return
-        subject = "[网站监控] 每日报告: 仍处于下线状态的网站"
-        lines = [f"截至 {datetime.now():%Y-%m-%d %H:%M:%S},以下网站仍处于下线状态:", ""]
-        for url in urls:
+        lines.append("  (无)")
+
+    lines.append("")
+    lines.append(f"仍处于下线状态({len(down_urls)}):")
+    if down_urls:
+        for url in down_urls:
             lines.append(f"  - {url}(最近错误: {states[url].last_error})")
-    send_mail(cfg, subject, "\n".join(lines))
+    else:
+        lines.append("  (无)")
+
+    send_mail(cfg, "[网站监控] 每日报告", "\n".join(lines))
 
 
 def run() -> None:
     cfg = load_config()
     states = {url: SiteState() for url in cfg.site_urls}
-    last_up_report_date = None
-    last_down_report_date = None
+    last_report_date = None
 
     log(f"开始监控 {len(cfg.site_urls)} 个网站,间隔 {cfg.check_interval} 秒:")
     for url in cfg.site_urls:
@@ -197,14 +198,10 @@ def run() -> None:
 
         now = datetime.now()
         today = now.date()
-        if now.hour >= cfg.up_report_hour and last_up_report_date != today:
-            log("[每日报告] 发送正常运行网站报告")
-            send_daily_report(cfg, states, urls_up=True)
-            last_up_report_date = today
-        if now.hour >= cfg.down_report_hour and last_down_report_date != today:
-            log("[每日报告] 发送下线网站报告")
-            send_daily_report(cfg, states, urls_up=False)
-            last_down_report_date = today
+        if now.hour >= cfg.daily_report_hour and last_report_date != today:
+            log("[每日报告] 发送每日监控报告")
+            send_daily_report(cfg, states)
+            last_report_date = today
 
         time.sleep(cfg.check_interval)
 
